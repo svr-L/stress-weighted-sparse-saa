@@ -56,9 +56,6 @@ stress-weighted-sparse-saa/
 ├── .gitignore
 ├── notebooks/
 │   └── stress-weighted-sparse-saa.ipynb
-├── paper/
-│   ├── stress-weighted-sparse-saa_preprint_JPM_READY.pdf
-│   └── stress-weighted-sparse-saa_preprint_JPM_READY.tex
 ├── figures/
 │   ├── wf_net_wealth_drawdown_expanding_1y_1m.png
 │   └── etf_correlation_matrix.png
