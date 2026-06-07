@@ -1,0 +1,877 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{setspace}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{longtable}
+\usepackage{pdflscape}
+\usepackage{float}
+\graphicspath{{figures/}{./}}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\onehalfspacing
+
+\title{\textbf{Stress-Weighted Sparse Strategic Asset Allocation:}\\
+\large Soft-Frobenius Covariance Estimation, Robust Growth Constraints, and Greedy Core-Satellite Construction}
+
+\author{
+Saverio Lauriola\\
+\small Independent Researcher
+\thanks{Correspondence: \href{mailto:saveriolauriola@outlook.it}{saveriolauriola@outlook.it}. Replication materials: \url{https://github.com/svr-L/stress-weighted-sparse-saa}. This draft is an independent research preprint. The views and results are for research purposes only and do not constitute investment advice.}
+}
+
+\date{May 26, 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Strategic asset allocation is often built on unconditional covariance estimates, even though diversification benefits tend to be least reliable during stress regimes. This paper proposes a stress-weighted sparse strategic asset allocation framework that reweights historical observations according to the degree to which the current correlation structure departs from its long-run configuration. The state variable is the Frobenius distance between a rolling or exponentially weighted correlation matrix and a long-run reference matrix. Rather than imposing a binary stress classification, the framework uses an exponential soft-weighting scheme to estimate a stress-conditioned covariance matrix, stabilized by shrinkage. Portfolio construction minimizes stress-weighted variance subject to a robust lower bound on expected log-growth, while a greedy core-satellite layer produces sparse and interpretable allocations.
+
+Empirically, the framework is tested on a 12-asset ETF universe spanning equities, Treasuries, inflation-linked bonds, credit, commodities, gold, and real estate. Ablation tests compare four model classes: Markowitz with base covariance, stress-MV with soft-Frobenius covariance, greedy allocation with base covariance, and the full greedy soft-Frobenius specification. The main implementable evidence comes from validation-selected walk-forward tests, where parameters are re-estimated using only prior train/validation data and all reported returns are net of CS/AR transaction-cost estimates. In the expanding walk-forward protocol, the full specification improves the net Martin Ratio to 2.441 versus 1.518 for Markowitz Base-Cov and reduces maximum drawdown to -17.82\% versus -22.29\%. In the canonical rolling three-year protocol, the full specification improves return, Sharpe ratio, Ulcer Index, and Martin Ratio, although its maximum drawdown is larger than that of the more conservative Markowitz baseline. Frozen-parameter final tests provide an additional robustness check: the full specification improves the final-test Martin Ratio to 0.916 versus 0.793 and the Ulcer Index to 0.0663 versus 0.0714, while maximum drawdown also improves moderately (-17.26\% versus -18.07\%). Paired block-bootstrap inference supports positive final-test differentials in Sharpe, Martin, Ulcer Index, and maximum drawdown, while raw return differences are positive but statistically weaker. Overall, the results support a practitioner-oriented framework that improves portfolio construction by conditioning risk estimates on dependence-structure instability rather than forecasting returns.
+\end{abstract}
+
+\vspace{0.5cm}
+\noindent \textbf{Keywords:} Strategic asset allocation; covariance estimation; stress testing; sparse portfolio construction; robust optimization; drawdown risk; Martin ratio; transaction costs.
+
+\noindent \textbf{JEL Classification:} G11, G12, G17, C32, C58.
+
+\newpage
+
+\section{Introduction}
+
+Strategic asset allocation is usually framed as a trade-off between expected return and risk. Since \citet{markowitz1952}, the canonical representation of risk has been the covariance matrix of asset returns. Yet the covariance matrix used in portfolio construction is typically estimated unconditionally, even though the economic value of diversification is state-dependent. Diversification is most valuable in stress regimes, but precisely in those regimes, the dependence structure among asset classes may differ materially from its long-run average.
+
+The central problem addressed in this paper is therefore not return prediction. The problem is risk estimation in the states where diversification is most likely to fail. Standard covariance estimators treat normal and stress observations as equally informative for strategic portfolio construction. A pure stress-window estimator, on the other hand, often relies on a small number of observations and becomes statistically fragile. This paper proposes an intermediate approach: a continuous stress-weighted covariance estimator based on the Frobenius distance between the current and long-run correlation structures.
+
+The framework rests on three components. First, a Frobenius-distance state variable measures dependence-structure instability:
+\begin{equation}
+D_t = \frac{\|R_t - \bar{R}\|_F}{\sqrt{N(N-1)}},
+\end{equation}
+where $R_t$ is a rolling or exponentially weighted correlation matrix and $\bar{R}$ is a long-run reference matrix. The signal is not interpreted as a crisis predictor. It is interpreted as a measure of how far the current diversification structure is from its long-run reference.
+
+Second, rather than converting this state variable into a hard stress/non-stress classification, observations receive soft stress weights:
+\begin{equation}
+\omega_t(\kappa) =
+\frac{\exp(\kappa z_t)}
+{\sum_s \exp(\kappa z_s)},
+\end{equation}
+where $z_t$ is the standardized Frobenius signal and $\kappa$ controls the intensity of stress conditioning. This produces a stress-weighted covariance estimator that remains connected to the full empirical distribution while assigning greater mass to observations in which the dependence structure is more abnormal.
+
+Third, portfolio construction minimizes stress-weighted variance subject to a robust lower bound on expected log-growth. The growth constraint is motivated by the compounding problem: long-horizon investors care about the path of wealth, not only one-period arithmetic returns. The sparse implementation uses a greedy core-satellite construction. The equity core represents the long-run growth engine, while satellites are added only insofar as they improve the stress-risk profile without violating the robust growth constraint.
+
+The empirical question is whether this framework improves the drawdown-adjusted and compounding-aware profile of strategic allocations relative to Markowitz-style baselines. The current evidence supports this interpretation. The framework does not consistently deliver statistically significant higher raw returns. Its value is instead concentrated in drawdown-path metrics, especially the Martin Ratio and Ulcer Index. Because the framework targets the path of compound growth rather than a single terminal or extreme observation, the evaluation emphasizes path-dependent drawdown metrics that aggregate the depth and persistence of drawdowns over the full trajectory. Maximum drawdown is reported as a widely recognized worst-case statistic, but it is treated as a complementary indicator rather than the primary measure of compound-growth preservation. As detailed in Section \ref{sec:results}, maximum-drawdown improvements are positive in several specifications but remain protocol-dependent.
+
+The contribution is practitioner-oriented. The paper does not claim a new globally optimal algorithm. It instead proposes a coherent allocation pipeline: (i) measure dependence-structure instability; (ii) estimate stress-weighted covariance through continuous reweighting; (iii) stabilize the estimator through shrinkage; (iv) preserve compound growth through a robust log-growth constraint; and (v) implement the allocation through a sparse and interpretable core-satellite procedure.
+
+The remainder of the paper is organized as follows. Section \ref{sec:related} discusses related literature. Section \ref{sec:methodology} presents the methodology. Section \ref{sec:data} describes the data and asset universe. Section \ref{sec:empirical_design} explains the empirical design. Section \ref{sec:results} reports static, walk-forward, transaction-cost, and inference results. Section \ref{sec:theoretical_motivation} provides conceptual foundations. Section \ref{sec:limitations} discusses limitations and future work. Section \ref{sec:conclusion} concludes.
+
+\section{Related Literature}
+\label{sec:related}
+
+This paper is related to five strands of literature.
+
+The first is classical mean-variance portfolio construction. \citet{markowitz1952} introduced the mean-variance framework, and subsequent research has documented the instability of mean-variance portfolios under estimation error. \citet{michaud1989} emphasized the ``error maximization'' problem of optimized portfolios. \citet{ledoitwolf2004} proposed shrinkage methods to improve covariance estimation in portfolio applications.
+
+The second strand concerns correlation breakdown and state-dependent dependence. \citet{longinsolnik2001} and \citet{angchen2002} document that correlations are asymmetric and state-dependent, especially during downside or stress regimes. In multi-asset allocation, the issue is not only that correlations rise, but that the structure of dependence changes. Hedges that appear reliable under unconditional estimates may become unstable when the factor structure shifts.
+
+The third strand concerns latent factors and large-dimensional covariance structures. Dynamic-factor and approximate-factor methods, including \citet{forni2000} and \citet{stockwatson2002}, provide a natural interpretation of changes in correlation structure as changes in common factor strength or factor composition. This paper does not estimate a formal factor model. Instead, it uses the Frobenius distance as a non-parametric state variable for dependence-structure instability.
+
+The fourth strand concerns robust and distributionally robust portfolio optimization. \citet{bental2009} provide a general treatment of robust optimization. In portfolio construction, robust formulations are often used to address estimation uncertainty in expected returns and covariance inputs. This paper uses a lower-bound-style robust log-growth constraint derived from a stationary block-bootstrap distribution of expected log-return estimates, implemented through a second-order cone constraint \citep{politisromano1994}.
+
+The fifth strand concerns sparse and constrained portfolio construction. \citet{jagannathanma2003} show that constraints can improve portfolio performance by reducing the impact of estimation error. \citet{demiguel2009} emphasize the difficulty of outperforming naive diversification when estimation error is large. \citet{brodie2009} connect sparse portfolio construction to regularization. The greedy layer used here is best understood in that spirit: it is a sparse implementation and regularization device, not a formal claim of global optimality.
+
+Finally, the paper is connected to growth-optimal and compounding-aware portfolio choice. \citet{kelly1956} and \citet{latane1959} emphasize expected log-growth as the relevant long-horizon object under reinvestment. This paper does not implement unconstrained Kelly optimization. Instead, it uses log-growth as a feasibility constraint: the allocation must preserve a robust lower bound on expected compound growth while minimizing stress-conditioned variance.
+
+\section{Methodology}
+\label{sec:methodology}
+
+\subsection{Frobenius Stress Signal}
+
+Let $r_t \in \mathbb{R}^N$ denote the vector of asset returns at time $t$. Let $R_t$ denote a rolling or exponentially weighted estimate of the correlation matrix and let $\bar{R}$ denote a long-run reference correlation matrix. The Frobenius stress signal is defined as:
+\begin{equation}
+D_t = \frac{\|R_t - \bar{R}\|_F}{\sqrt{N(N-1)}}.
+\end{equation}
+
+The normalization makes the signal more comparable across asset universes of different dimensions. The signal is high when the current correlation structure differs materially from its long-run configuration.
+
+The choice of the Frobenius norm is motivated by transparency and interpretability. It aggregates pairwise deviations in the correlation structure into a scalar measure of structural instability. Unlike a volatility index or a single market drawdown indicator, it captures changes in the dependency structure across the full asset universe.
+
+\subsection{Soft Stress Weighting}
+
+A common way to define stress observations is to select days above a percentile threshold of a stress indicator. This is simple but fragile: two days just above and just below the threshold receive completely different treatment.
+
+Instead, this paper uses a continuous weighting scheme. Let $z_t$ be the standardized Frobenius signal:
+\begin{equation}
+z_t = \frac{D_t - \mu_D}{\sigma_D}.
+\end{equation}
+
+For a concentration parameter $\kappa \geq 0$, define:
+\begin{equation}
+\omega_t(\kappa) =
+\frac{\exp(\kappa z_t)}
+{\sum_s \exp(\kappa z_s)}.
+\end{equation}
+
+When $\kappa=0$, all observations receive equal weight. As $\kappa$ increases, observations with higher Frobenius stress receive more weight. The effective sample size is monitored as:
+\begin{equation}
+N_{\mathrm{eff}}(\kappa) =
+\frac{1}{\sum_t \omega_t(\kappa)^2}.
+\end{equation}
+
+The parameter $\kappa$ is selected on a validation window subject to an effective-sample-size constraint. In addition, a paper-safe rule selects the most stable specification among near-best validation performers. This prevents the covariance estimator from collapsing onto a small number of extreme observations.
+
+\subsection{Stress-Weighted Covariance Estimator}
+
+Given the weights $\omega_t(\kappa)$, the stress-weighted covariance estimator is:
+\begin{equation}
+\Sigma_{\kappa}
+=
+\sum_t \omega_t(\kappa)
+(r_t - \bar{r}_{\omega})(r_t - \bar{r}_{\omega})^\top,
+\end{equation}
+where:
+\begin{equation}
+\bar{r}_{\omega} = \sum_t \omega_t(\kappa) r_t.
+\end{equation}
+
+The covariance estimator is then shrinkage-stabilized:
+\begin{equation}
+\Sigma_{\kappa}^{shr}
+=
+(1-\delta)\Sigma_{\kappa} + \delta F,
+\end{equation}
+where $F$ is a structured target, such as a constant-correlation or diagonal target, and $\delta$ is the shrinkage intensity.
+
+The role of soft weighting is to condition the sample toward stress-like observations. The role of shrinkage is to reduce estimation error. The two mechanisms are complementary.
+
+\subsection{Robust Log-Growth Constraint}
+
+Let $\mu_g$ denote the vector of expected log-growth estimates and let $\Sigma_g$ denote the covariance matrix of stationary block-bootstrap estimates of expected log-growth \citep{politisromano1994}. The robust growth constraint is:
+\begin{equation}
+w^\top \mu_g - k \sqrt{w^\top \Sigma_g w} \geq \tau.
+\end{equation}
+
+Equivalently, if $L_g$ is a Cholesky factor such that $L_g L_g^\top = \Sigma_g$, the constraint can be written as:
+\begin{equation}
+w^\top \mu_g - k \|L_g^\top w\|_2 \geq \tau.
+\end{equation}
+
+This is a second-order cone constraint. It imposes a lower-bound-style requirement on expected log-growth, penalized by estimation uncertainty. The parameter $k$ controls conservativeness and $\tau$ determines the required robust growth threshold.
+
+\subsection{Optimization Problem}
+
+For a given $\kappa$ and $\tau$, the continuous stress-MV problem is:
+\begin{align}
+\min_w \quad & w^\top \Sigma_{\kappa}^{shr} w \\
+\text{s.t.} \quad & \mathbf{1}^\top w = 1, \\
+& w \geq 0, \\
+& w_{\mathrm{core}} \geq w_{\mathrm{core,min}}, \\
+& w^\top \mu_g - k \sqrt{w^\top \Sigma_g w} \geq \tau.
+\end{align}
+
+This defines a stress-aware frontier over values of $\tau$.
+
+\subsection{Greedy Core-Satellite Construction}
+
+The greedy implementation begins with a fixed equity core. At each iteration, the algorithm evaluates candidate satellite assets and selects the asset that most improves the stress-aware objective subject to feasibility of the robust growth constraint. The procedure stops when no candidate satellite improves the objective or when a pre-specified stopping condition is reached.
+
+The greedy layer is not claimed to be globally optimal. Its purpose is to produce a sparse, interpretable, and more stable implementation of the stress-aware allocation. The empirical value of the greedy layer is evaluated through ablation.
+
+\subsection{Ablation Design}
+
+The paper evaluates four model classes:
+\begin{enumerate}[label=(\roman*)]
+    \item \textbf{Markowitz Base-Cov}: continuous optimizer using the unconditional/base covariance;
+    \item \textbf{Stress-MV Soft-Frob}: continuous optimizer using the soft-Frobenius covariance;
+    \item \textbf{Greedy Base-Cov}: greedy core-satellite selection using the base covariance;
+    \item \textbf{Greedy Soft-Frob}: full framework combining soft-Frobenius covariance and greedy selection.
+\end{enumerate}
+
+This design isolates the contribution of stress-weighted covariance estimation, greedy sparsification, and their interaction.
+
+\section{Data}
+\label{sec:data}
+
+The empirical analysis uses liquid US-listed ETFs as investable proxies for broad asset classes. The universe contains 12 ETFs:
+
+\begin{table}[h!]
+\centering
+\caption{Asset universe}
+\begin{tabular}{lll}
+\toprule
+Ticker & Asset Class & Description \\
+\midrule
+SPY & US equity & S\&P 500 ETF \\
+EFA & Developed ex-US equity & Developed markets ex-US \\
+EEM & Emerging markets equity & Emerging market equities \\
+SHY & Short Treasuries & US Treasuries 1--3Y \\
+IEF & Intermediate Treasuries & US Treasuries 7--10Y \\
+TLT & Long Treasuries & US Treasuries 20Y+ \\
+TIP & Inflation-linked bonds & US TIPS \\
+LQD & Investment-grade credit & US corporate IG bonds \\
+HYG & High-yield credit & US high-yield bonds \\
+GLD & Gold & Gold ETF \\
+DBC & Commodities & Broad commodity ETF \\
+VNQ & Real estate & US REITs \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The effective common sample starts on April 11, 2007 and ends on December 30, 2025, after intersecting the ETF histories required by the full universe. This leaves 4,711 daily observations for return construction. The final static test window used in the paper-safe train-validation-test exercise runs from March 2022 to December 2025, while the walk-forward evaluation starts after the initial training and validation windows and ends in December 2025.
+
+\begin{table}[h!]
+\centering
+\caption{Sample construction and empirical design summary}
+\label{tab:sample_design}
+\begin{tabular}{ll}
+\toprule
+Item & Description \\
+\midrule
+Data source & Yahoo Finance adjusted OHLC data \\
+Effective common sample & April 11, 2007 -- December 30, 2025 \\
+Daily observations & 4,711 \\
+Asset universe & 12 liquid US-listed ETF asset-class proxies \\
+Core asset & SPY, with a fixed equity-core constraint \\
+Final static test & March 2022 -- December 2025 \\
+Walk-forward protocols & Expanding, rolling 3-year, and rolling 5-year training windows \\
+Rebalancing convention & Monthly target-weight updates in walk-forward tests \\
+Main transaction-cost model & CS/AR median with data-driven floor and Frobenius stress multiplier \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+Table \ref{tab:etf_summary_statistics} reports descriptive statistics for the ETF universe over the effective common sample. The universe combines high-growth equity and real-asset exposures with lower-volatility fixed-income instruments, creating a transparent multi-asset testbed for evaluating whether stress-conditioned covariance estimation improves strategic allocation.
+
+\begin{table}[h!]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\caption{Descriptive statistics of the ETF universe, April 2007--December 2025}
+\label{tab:etf_summary_statistics}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrr}
+\toprule
+Ticker & Obs & Ann. Ret & Ann. Vol & Sharpe & Skew & Excess Kurt. & MaxDD \\
+\midrule
+SPY & 4711 & 10.76\% & 19.85\% & 0.54 & 0.01 & 14.46 & -55.19\% \\
+EFA & 4711 & 4.26\% & 21.80\% & 0.20 & -0.03 & 13.92 & -61.04\% \\
+EEM & 4711 & 3.87\% & 28.00\% & 0.14 & 0.59 & 19.32 & -66.43\% \\
+SHY & 4711 & 1.87\% & 1.53\% & 1.22 & 0.40 & 8.47 & -5.71\% \\
+IEF & 4711 & 3.40\% & 7.01\% & 0.48 & 0.14 & 2.61 & -23.93\% \\
+TLT & 4711 & 3.16\% & 15.27\% & 0.21 & 0.08 & 3.16 & -48.35\% \\
+TIP & 4711 & 3.50\% & 6.36\% & 0.55 & 0.21 & 10.02 & -14.51\% \\
+LQD & 4711 & 4.23\% & 8.92\% & 0.47 & 0.04 & 56.44 & -24.96\% \\
+HYG & 4711 & 4.99\% & 11.01\% & 0.45 & 0.75 & 42.34 & -34.25\% \\
+GLD & 4711 & 10.01\% & 17.49\% & 0.57 & -0.14 & 6.41 & -45.56\% \\
+DBC & 4711 & 0.50\% & 19.14\% & 0.03 & -0.42 & 3.39 & -76.36\% \\
+VNQ & 4711 & 4.95\% & 29.96\% & 0.17 & 0.02 & 16.35 & -71.25\% \\
+\bottomrule
+\end{tabular}}
+\begin{minipage}{0.92\textwidth}
+\footnotesize \emph{Notes:} Returns and volatility are annualized. Sharpe ratios are computed with a zero risk-free rate for descriptive purposes. Maximum drawdown is computed from each ETF's full wealth path over the common sample.
+\end{minipage}
+\end{table}
+
+The average pairwise return correlation across the 12 ETFs is 0.22 over the common sample, with pairwise correlations ranging from -0.32 to 0.91. The full correlation matrix is reported in Appendix \ref{app:corr_matrix}.
+
+The data are downloaded from Yahoo Finance. The requested sample begins in 2000 and ends in 2025, with the effective common sample determined by ETF availability. Returns are computed from adjusted close prices. Transaction-cost estimates use daily high, low, and close data.
+
+The universe is intentionally simple and transparent. The objective is not to optimize a production portfolio, but to test whether the stress-weighted allocation framework adds value across broad investable asset classes.
+
+\section{Empirical Design}
+\label{sec:empirical_design}
+
+\subsection{Model Selection}
+
+The concentration parameter $\kappa$ and the growth threshold $\tau$ are selected on validation windows. A paper-safe selection rule is used to avoid overly concentrated stress estimators. The rule first identifies near-best validation performers and then prefers the specification with higher effective sample size. In the latest run, the paper-safe selection chooses:
+\begin{equation}
+\kappa = 0.5, \qquad \tau = 0.0048,
+\end{equation}
+with $N_{\mathrm{eff}}=2029$ and validation Martin Ratio of 3.89.
+
+Table \ref{tab:kappa_validation} reports the validation candidates. The validation maximum occurs at $\kappa=1.5$, but its effective sample size is substantially lower. The paper-safe rule selects $\kappa=0.5$ because it is within the near-best tolerance while retaining a much larger effective sample size.
+
+\begin{table}[h!]
+\centering
+\caption{Validation selection over $\kappa$ for Greedy Soft-Frob, SPY-only endpoint excluded}
+\label{tab:kappa_validation}
+\begin{tabular}{rrrrrrrr}
+\toprule
+$\kappa$ & $N_{eff}$ & Shrink & $\tau$ & Ret & Sharpe & MaxDD & Martin \\
+\midrule
+1.5 & 304.6 & 0.039 & 0.0048 & 11.06\% & 1.106 & -14.63\% & 3.948 \\
+1.0 & 789.7 & 0.020 & 0.0048 & 10.95\% & 1.097 & -14.54\% & 3.889 \\
+\textbf{0.5} & \textbf{2029.0} & \textbf{0.020} & \textbf{0.0048} & \textbf{10.95\%} & \textbf{1.097} & \textbf{-14.54\%} & \textbf{3.889} \\
+2.0 & 157.7 & 0.076 & 0.0048 & 11.20\% & 1.086 & -15.70\% & 3.877 \\
+2.5 & 103.5 & 0.116 & -0.0035 & 10.32\% & 1.038 & -15.05\% & 3.780 \\
+3.0 & 78.5 & 0.153 & -0.0035 & 10.42\% & 1.014 & -16.18\% & 3.665 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For transparency, Appendix-style sensitivity on the broader training sample is reported in Table \ref{tab:kappa_sensitivity}. The monotonic improvement in some in-sample drawdown metrics at high $\kappa$ is accompanied by a collapse in effective sample size, which motivates the conservative validation rule.
+
+\begin{table}[h!]
+\centering
+\caption{$\kappa$ sensitivity: best non-degenerate Greedy Soft-Frob point on the broad training sample}
+\label{tab:kappa_sensitivity}
+\begin{tabular}{rrrrrrr}
+\toprule
+$\kappa$ & $N_{eff}$ & Shrink & Ret & Sharpe & MaxDD & Martin \\
+\midrule
+0.5 & 2403.7 & 0.020 & 7.80\% & 0.803 & -21.44\% & 0.980 \\
+1.0 & 980.5 & 0.020 & 8.45\% & 0.885 & -20.30\% & 1.173 \\
+1.5 & 376.3 & 0.032 & 8.89\% & 0.979 & -18.19\% & 1.420 \\
+2.0 & 185.2 & 0.065 & 9.39\% & 1.054 & -16.79\% & 1.683 \\
+2.5 & 114.9 & 0.105 & 9.73\% & 1.102 & -15.83\% & 1.895 \\
+3.0 & 83.2 & 0.144 & 9.96\% & 1.134 & -15.16\% & 2.060 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Transaction-Cost Modelling}
+
+Transaction costs are evaluated using a robustness panel of data-driven spread estimates. The panel includes Corwin--Schultz high-low spread estimates \citep{corwinschultz2012}, Abdi--Ranaldo-style high-low-close spread proxies \citep{abdiranaldo2017}, CS/AR median and maximum composites, data-driven spread floors based on positive historical estimates, and a stress-liquidity multiplier linked to the Frobenius stress signal.
+
+The main transaction-cost model used for final net results is the CS/AR median with data-driven floor and Frobenius stress multiplier. This avoids the unrealistic collapse of transaction costs to zero while remaining data-driven and regime-sensitive.
+
+Table \ref{tab:cost_summary} summarizes the transaction-cost panel.
+
+\begin{table}[h!]
+\centering
+\caption{Transaction-cost model summary: one-way costs in basis points, pooled across assets and dates}
+\label{tab:cost_summary}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrr}
+\toprule
+Cost model & Mean & Median & P75 & P90 & P95 & Max & Zero share \\
+\midrule
+CS pure & 8.34 & 0.00 & 10.38 & 26.68 & 39.85 & 162.66 & 0.554 \\
+AR pure & 15.64 & 1.42 & 20.88 & 47.59 & 69.95 & 254.66 & 0.478 \\
+CS/AR median & 11.99 & 4.04 & 16.61 & 33.95 & 48.66 & 208.66 & 0.381 \\
+CS/AR max & 18.28 & 6.85 & 25.66 & 51.38 & 73.65 & 254.66 & 0.381 \\
+CS floor & 11.19 & 5.76 & 12.33 & 26.90 & 39.86 & 162.66 & 0.000 \\
+AR floor & 19.62 & 10.36 & 22.53 & 47.70 & 69.95 & 254.66 & 0.000 \\
+CS/AR median floor & 14.12 & 7.50 & 17.05 & 34.13 & 48.66 & 208.66 & 0.000 \\
+CS/AR median floor + stress & 17.33 & 9.05 & 20.70 & 41.94 & 60.27 & 411.31 & 0.000 \\
+\bottomrule
+\end{tabular}}
+
+\end{table}
+
+\subsection{Bootstrap Replication Choice}
+
+The number of stationary block-bootstrap replications used inside each walk-forward fold is treated as a numerical accuracy parameter, not as a tuned financial hyperparameter. The bootstrap replications estimate the mean vector and covariance matrix of expected log-growth, which enter the robust growth constraint through the lower-bound term
+\begin{equation}
+LCB(w)=w^\top \mu_g-k\sqrt{w^\top \Sigma_g w}.
+\end{equation}
+The relevant Monte Carlo object is therefore the bootstrap standard-deviation term $\sqrt{w^\top\Sigma_g w}$. Under the standard approximation for a variance estimate based on $B$ independent replications, the relative Monte Carlo standard error of a variance estimator is approximately
+\begin{equation}
+\frac{MCSE(\widehat{\sigma}^2)}{\widehat{\sigma}^2}\approx \sqrt{\frac{2}{B-1}},
+\end{equation}
+and the corresponding relative Monte Carlo standard error of the standard-deviation estimate is approximately
+\begin{equation}
+\frac{MCSE(\widehat{\sigma})}{\widehat{\sigma}}\approx \frac{1}{\sqrt{2(B-1)}}.
+\end{equation}
+The walk-forward experiments use $B=300$ bootstrap replications, which implies an approximate relative Monte Carlo standard error of about $4.1\%$ for the standard-deviation term entering the robust log-growth constraint. This value is used consistently across the canonical walk-forward and protocol-sensitivity experiments. Lower values such as $B=200$ reduce computation but imply a relative error of about $5.0\%$ for the same term and are therefore not used for the reported main results. Appendix Table \ref{tab:boot_b_sensitivity} reports a diagnostic comparison between the earlier lower-replication specification and the audited $B=300$ reference. The comparison is useful because it shows that the main qualitative evidence---improvements in Sharpe, Ulcer Index, and Martin Ratio---survives the more conservative bootstrap setting, while the maximum-drawdown evidence becomes protocol-dependent rather than universal.
+
+\subsection{Walk-Forward Protocols}
+
+The framework is evaluated through rolling and expanding walk-forward protocols. The current notebook tests: expanding train / 1-year validation / 1-month test; rolling 3-year train / 1-year validation / 1-month test; and rolling 5-year train / 1-year validation / 1-month test.
+
+The walk-forward implementation builds a continuous target-weight schedule and applies transaction costs when allocations change across folds. This ensures that gross and net returns correspond to the same rebalancing convention.
+
+Table \ref{tab:experiment_map} summarizes the empirical hierarchy used in the paper. The walk-forward experiments are the main implementable evidence because they re-estimate the model using only information available prior to each test fold. The frozen final test is retained as a conservative robustness check.
+
+\begin{table}[h!]
+\centering
+\caption{Empirical experiment map}
+\label{tab:experiment_map}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lllllll}
+\toprule
+Experiment & Train window & Validation window & Test step & Parameter policy & $B$ & Role in paper \\
+\midrule
+Frozen final test & fixed train+validation & fixed validation & 2022--2025 holdout & selected once & -- & conservative robustness check \\
+Canonical walk-forward & rolling 3y & rolling 1y & 1 month & selected each fold & 300 & main implementable result \\
+Protocol sensitivity & rolling 5y / expanding & rolling 1y & 1 month & selected each fold & 300 & robustness to re-estimation design \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+
+\subsection{Performance Metrics}
+
+The evaluation reports annualized return, volatility, Sharpe ratio, maximum drawdown, Calmar ratio, Ulcer Index, and Martin Ratio. Let $V_t$ denote cumulative portfolio wealth and let
+\begin{equation}
+DD_t = \frac{V_t - \max_{s \leq t} V_s}{\max_{s \leq t} V_s}
+\end{equation}
+denote the current drawdown. The Ulcer Index is defined as:
+\begin{equation}
+\mathrm{Ulcer} = \sqrt{\frac{1}{T}\sum_{t=1}^T DD_t^2}.
+\end{equation}
+The Martin Ratio is:
+\begin{equation}
+\mathrm{Martin} =
+\frac{\mathrm{CAGR} - r_f}{\mathrm{Ulcer\ Index}}.
+\end{equation}
+
+Maximum drawdown is reported because it is widely understood and captures the worst observed peak-to-trough loss. However, it is a single-path extreme rather than an aggregate measure of the drawdown experience. Two portfolios with similar maximum drawdowns may have materially different compounding outcomes if one recovers quickly while the other remains underwater for extended periods. The Ulcer Index addresses this limitation by integrating squared drawdowns over the full path, thereby capturing both depth and persistence. The Martin Ratio then relates compound return to this integrated drawdown burden. For this reason, the paper treats the Ulcer Index and Martin Ratio as the primary drawdown-aware metrics, while maximum drawdown is reported as a secondary worst-case indicator. Sharpe ratio is retained as the standard variance-based benchmark.
+
+\section{Empirical Results}
+\label{sec:results}
+
+\subsection{Final Static Test}
+
+Table \ref{tab:final_static} reports final-test net results under the paper-safe specification and the main transaction-cost model.
+
+\begin{table}[h!]
+\centering
+\caption{Final test net performance, March 2022--December 2025, under the main CS/AR transaction-cost model}
+\label{tab:final_static}
+\begin{tabular}{lrrrrr}
+\toprule
+Model & Return & Sharpe & MaxDD & Ulcer & Martin \\
+\midrule
+Markowitz Base-Cov & 5.66\% & 0.538 & -18.07\% & 0.0714 & 0.793 \\
+Stress-MV Soft-Frob & 5.93\% & 0.574 & -17.55\% & 0.0682 & 0.870 \\
+Greedy Base-Cov & 5.65\% & 0.536 & -18.09\% & 0.0715 & 0.790 \\
+Greedy Soft-Frob & \textbf{6.08\%} & \textbf{0.595} & \textbf{-17.26\%} & \textbf{0.0663} & \textbf{0.916} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The full model improves all reported drawdown-adjusted metrics relative to Markowitz Base-Cov. The improvement is consistent across the reported drawdown-adjusted metrics, while the raw return differential remains economically positive but statistically weaker.
+
+\subsection{Paired Bootstrap Inference}
+
+Table \ref{tab:bootstrap_all} reports paired circular-block bootstrap evidence for final-test net returns under the main transaction-cost model. The table summarizes the four comparisons most relevant for ablation: the full model versus Markowitz Base-Cov, soft-Frobenius continuous optimization versus Markowitz Base-Cov, the full model versus Stress-MV Soft-Frob, and the full model versus Greedy Base-Cov.
+
+\begin{table}[h!]
+\centering
+\caption{Paired block-bootstrap differentials on final-test net returns}
+\label{tab:bootstrap_all}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrr}
+\toprule
+Comparison & Metric & Difference & 2.5\% CI & 97.5\% CI & $p(\Delta>0)$ \\
+\midrule
+Greedy Soft-Frob -- Markowitz & Sharpe & 0.0570 & 0.0147 & 0.0971 & 0.996 \\
+Greedy Soft-Frob -- Markowitz & Martin & 0.1233 & 0.0145 & 0.4737 & 0.998 \\
+Greedy Soft-Frob -- Markowitz & Ulcer & -0.0051 & -0.0151 & -0.0014 & 0.000 \\
+Greedy Soft-Frob -- Markowitz & MaxDD improvement & 0.0081 & 0.0018 & 0.0228 & 0.998 \\
+Greedy Soft-Frob -- Markowitz & Return & 0.0042 & -0.0025 & 0.0093 & 0.916 \\
+\midrule
+Stress-MV Soft-Frob -- Markowitz & Sharpe & 0.0362 & 0.0095 & 0.0614 & 0.996 \\
+Stress-MV Soft-Frob -- Markowitz & Martin & 0.0768 & 0.0091 & 0.2995 & 0.998 \\
+Stress-MV Soft-Frob -- Markowitz & Ulcer & -0.0032 & -0.0097 & -0.0009 & 0.000 \\
+Stress-MV Soft-Frob -- Markowitz & MaxDD improvement & 0.0052 & 0.0012 & 0.0145 & 0.998 \\
+Stress-MV Soft-Frob -- Markowitz & Return & 0.0027 & -0.0016 & 0.0059 & 0.916 \\
+\midrule
+Greedy Soft-Frob -- Stress-MV & Sharpe & 0.0208 & 0.0054 & 0.0353 & 0.995 \\
+Greedy Soft-Frob -- Stress-MV & Martin & 0.0465 & 0.0055 & 0.1765 & 0.998 \\
+Greedy Soft-Frob -- Stress-MV & Ulcer & -0.0018 & -0.0054 & -0.0005 & 0.000 \\
+Greedy Soft-Frob -- Stress-MV & MaxDD improvement & 0.0029 & 0.0006 & 0.0082 & 0.994 \\
+Greedy Soft-Frob -- Stress-MV & Return & 0.0015 & -0.0009 & 0.0033 & 0.918 \\
+\midrule
+Greedy Soft-Frob -- Greedy Base & Sharpe & 0.0585 & 0.0148 & 0.0997 & 0.996 \\
+Greedy Soft-Frob -- Greedy Base & Martin & 0.1262 & 0.0148 & 0.4839 & 0.998 \\
+Greedy Soft-Frob -- Greedy Base & Ulcer & -0.0052 & -0.0155 & -0.0014 & 0.000 \\
+Greedy Soft-Frob -- Greedy Base & MaxDD improvement & 0.0083 & 0.0019 & 0.0235 & 0.998 \\
+Greedy Soft-Frob -- Greedy Base & Return & 0.0043 & -0.0025 & 0.0096 & 0.914 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+The evidence supports positive differentials in Sharpe, Martin, Ulcer Index, and maximum drawdown. The return differential is positive but not statistically significant. This supports the interpretation that the framework is primarily a drawdown-aware and compounding-aware allocation improvement, not a raw-return engine.
+
+\subsection{Transaction-Cost Robustness}
+
+Table \ref{tab:tc_robustness} reports net Martin ratios across the transaction-cost robustness panel. The ranking is stable: the full Greedy Soft-Frob specification has the highest net Martin Ratio across all cost models.
+
+\begin{table}[h!]
+\centering
+\caption{Transaction-cost robustness: final-test net Martin ratios}
+\label{tab:tc_robustness}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrr}
+\toprule
+Cost model & Markowitz Base & Stress-MV Soft-Frob & Greedy Base & Greedy Soft-Frob \\
+\midrule
+CS pure & 0.799 & 0.876 & 0.796 & 0.923 \\
+AR pure & 0.795 & 0.872 & 0.792 & 0.918 \\
+CS/AR median & 0.796 & 0.873 & 0.794 & 0.920 \\
+CS/AR max & 0.794 & 0.871 & 0.791 & 0.917 \\
+CS floor & 0.796 & 0.873 & 0.793 & 0.920 \\
+AR floor & 0.793 & 0.870 & 0.790 & 0.916 \\
+CS/AR median floor & 0.795 & 0.872 & 0.793 & 0.919 \\
+CS/AR median floor + stress & 0.793 & 0.870 & 0.790 & 0.916 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Walk-Forward Sensitivity}
+
+Tables \ref{tab:wf_expanding}--\ref{tab:wf_rolling5} report validation-selected walk-forward protocols computed with the same selection engine, transaction-cost model, and bootstrap setting as the canonical walk-forward backtest. Table \ref{tab:wf_expanding} reports the expanding walk-forward protocol.
+
+\begin{table}[h!]
+\centering
+\caption{Expanding walk-forward net performance, April 2011--December 2025}
+\label{tab:wf_expanding}
+\begin{tabular}{lrrrr}
+\toprule
+Model & Return & Sharpe & MaxDD & Martin \\
+\midrule
+Markowitz Base-Cov & 8.62\% & 1.033 & -22.29\% & 1.518 \\
+Stress-MV Soft-Frob & 8.75\% & 1.093 & -18.01\% & 1.993 \\
+Greedy Base-Cov & 9.61\% & 1.126 & -22.27\% & 1.854 \\
+Greedy Soft-Frob & \textbf{9.66\%} & \textbf{1.177} & \textbf{-17.82\%} & \textbf{2.441} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Under the expanding protocol, soft-Frobenius conditioning materially improves the drawdown path relative to base-covariance models. The full model achieves the highest return, highest Sharpe ratio, lowest maximum drawdown, and highest Martin Ratio.
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/walk_forward_drawdown_martin.png}
+\caption{Expanding walk-forward net performance diagnostics. The figure summarizes the maximum drawdown and Martin Ratio of the four allocation rules over the out-of-sample evaluation window. The visual evidence highlights the paper's central point: the framework is designed to improve drawdown-path quality rather than to forecast raw returns.}
+\label{fig:wf_drawdown_martin}
+\end{figure}
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/wf_net_wealth_drawdown_expanding_1y_1m.png}
+\caption{Expanding walk-forward net cumulative wealth and drawdown paths. Parameters are re-estimated using only prior train/validation data, and returns are net of the main CS/AR median-floor-stress transaction-cost model. The figure shows that the full Greedy Soft-Frob specification improves the wealth path while materially reducing drawdown persistence relative to Markowitz-style baselines.}
+\label{fig:wf_expanding_wealth_drawdown}
+\end{figure}
+
+
+Table \ref{tab:wf_rolling3} reports the rolling 3-year protocol.
+
+\begin{table}[h!]
+\centering
+\caption{Rolling 3-year train / 1-year validation / 1-month test net performance, April 2011--December 2025}
+\label{tab:wf_rolling3}
+\begin{tabular}{lrrrr}
+\toprule
+Model & Return & Sharpe & MaxDD & Martin \\
+\midrule
+Markowitz Base-Cov & 6.11\% & 0.804 & \textbf{-24.05\%} & 0.804 \\
+Stress-MV Soft-Frob & 5.91\% & 0.776 & -23.28\% & 0.807 \\
+Greedy Base-Cov & \textbf{9.74\%} & \textbf{0.934} & -30.81\% & 1.309 \\
+Greedy Soft-Frob & 9.56\% & 0.916 & -30.21\% & \textbf{1.336} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Under shorter rolling training windows, the greedy core-satellite layer becomes more important. Greedy Base-Cov and Greedy Soft-Frob both improve return, Sharpe ratio, Ulcer Index, and Martin Ratio relative to continuous Markowitz-style models. In this protocol, however, the greedy specifications accept a larger single maximum drawdown than the more conservative Markowitz baseline. This is not a contradiction of the framework's objective: the strongest evidence in the rolling three-year protocol is in the quality of the drawdown path, as summarized by Ulcer Index and Martin Ratio, rather than in the single worst drawdown observation. Soft-Frobenius conditioning slightly reduces return and Sharpe relative to Greedy Base-Cov, but improves Ulcer Index, Martin Ratio, and maximum drawdown relative to Greedy Base-Cov.
+
+Table \ref{tab:wf_rolling5} reports the rolling 5-year protocol.
+
+\begin{table}[h!]
+\centering
+\caption{Rolling 5-year train / 1-year validation / 1-month test net performance, April 2013--December 2025}
+\label{tab:wf_rolling5}
+\begin{tabular}{lrrrr}
+\toprule
+Model & Return & Sharpe & MaxDD & Martin \\
+\midrule
+Markowitz Base-Cov & 6.72\% & 0.835 & -23.96\% & 0.971 \\
+Stress-MV Soft-Frob & 6.46\% & 0.802 & -23.12\% & 0.978 \\
+Greedy Base-Cov & \textbf{8.93\%} & \textbf{0.869} & -23.95\% & 1.539 \\
+Greedy Soft-Frob & 8.64\% & 0.841 & \textbf{-23.16\%} & \textbf{1.573} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The rolling 5-year protocol tells a related but more favorable drawdown story. The greedy layer again preserves growth exposure and improves risk-adjusted performance relative to continuous baselines. In contrast to the rolling three-year protocol, Greedy Soft-Frob also slightly reduces maximum drawdown relative to Markowitz Base-Cov, while delivering materially higher Martin Ratio and lower Ulcer Index. Relative to Greedy Base-Cov, soft-Frobenius conditioning improves the drawdown profile through Ulcer Index, Martin Ratio, and maximum drawdown, at the cost of a modest reduction in return and Sharpe ratio.
+
+\subsection{Subperiod Analysis}
+
+Table \ref{tab:subperiod} reports net subperiod results from the walk-forward backtest. The evidence shows that the framework does not dominate in every environment. Instead, it improves the portfolio profile most clearly in the regimes where the economic problem is most relevant: periods of dependence instability, crisis rebound, and bond-hedge stress.
+
+\begin{table}[p]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\caption{Subperiod analysis: walk-forward net performance by economic regime}
+\label{tab:subperiod}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrrrr}
+\toprule
+Period & Model & $N$ & Return & Sharpe & MaxDD & Ulcer & Martin \\
+\midrule
+COVID & Greedy Base-Cov & 232 & 26.60\% & 1.160 & -18.19\% & 0.0355 & 7.493 \\
+COVID & Greedy Soft-Frob & 232 & 26.34\% & 1.146 & -18.31\% & 0.0356 & 7.391 \\
+COVID & Markowitz Base-Cov & 232 & -0.13\% & -0.012 & -12.47\% & 0.0696 & -0.019 \\
+COVID & Stress-MV Soft-Frob & 232 & -0.47\% & -0.040 & -12.72\% & 0.0718 & -0.066 \\
+\midrule
+2022 bear & Greedy Base-Cov & 251 & -25.22\% & -1.333 & -30.28\% & 0.1883 & -1.339 \\
+2022 bear & Greedy Soft-Frob & 251 & -24.42\% & -1.295 & -29.81\% & 0.1835 & -1.331 \\
+2022 bear & Markowitz Base-Cov & 251 & -21.94\% & -1.636 & -23.47\% & 0.1577 & -1.391 \\
+2022 bear & Stress-MV Soft-Frob & 251 & -21.05\% & -1.578 & -22.85\% & 0.1523 & -1.382 \\
+\midrule
+Recovery & Greedy Base-Cov & 250 & 19.09\% & 1.761 & -7.54\% & 0.0232 & 8.216 \\
+Recovery & Greedy Soft-Frob & 250 & 19.05\% & 1.749 & -7.54\% & 0.0236 & 8.080 \\
+Recovery & Markowitz Base-Cov & 250 & 10.69\% & 1.925 & -5.22\% & 0.0149 & 7.187 \\
+Recovery & Stress-MV Soft-Frob & 250 & 10.70\% & 1.893 & -5.29\% & 0.0153 & 6.971 \\
+\midrule
+Recent & Greedy Base-Cov & 501 & 14.22\% & 1.722 & -9.32\% & 0.0154 & 9.211 \\
+Recent & Greedy Soft-Frob & 501 & 14.25\% & 1.724 & -9.32\% & 0.0154 & 9.243 \\
+Recent & Markowitz Base-Cov & 501 & 14.20\% & 1.719 & -9.32\% & 0.0155 & 9.185 \\
+Recent & Stress-MV Soft-Frob & 501 & 14.22\% & 1.718 & -9.32\% & 0.0154 & 9.207 \\
+\bottomrule
+\end{tabular}}
+\begin{minipage}{0.92\textwidth}
+\footnotesize \emph{Notes:} COVID denotes the COVID shock/rebound subperiod; 2022 bear denotes the rates/bond bear market; Recovery denotes the recovery/disinflation subperiod; Recent denotes the recent test window. Returns are annualized and net of the main CS/AR median-floor-stress transaction-cost model.
+\end{minipage}
+\end{table}
+
+The subperiod analysis clarifies the mechanism. During the COVID shock/rebound, the greedy layer helps the portfolio maintain participation in the rebound. During the 2022 bond bear market, soft-Frobenius conditioning reduces the drawdown severity of duration-heavy hedging structures. In more benign recovery environments, standard Markowitz-style allocations remain competitive on Sharpe, but the full framework remains robust and does not destroy value.
+
+\subsection{Interpretation of the Empirical Evidence}
+
+The evidence points to a nuanced interpretation. In the frozen final test, the soft-Frobenius covariance estimator is the principal driver of the improvement, while the greedy layer adds value mainly through its interaction with the stress-conditioned covariance. In rolling walk-forward settings, the greedy core-satellite layer becomes more important, likely because shorter training windows produce noisier covariance estimates. The higher returns of greedy specifications across walk-forward protocols also suggest that sparse construction may preserve growth exposure more effectively than dense low-variance allocations, although the present analysis does not formally decompose these two mechanisms. The sparse construction therefore acts as an interpretable implementation layer and as a potential regularizer against over-dispersed dense solutions.
+
+The final interpretation is therefore not that one component dominates universally. Instead: soft-Frobenius covariance improves the state-conditional measurement of risk; greedy sparse allocation preserves growth exposure and interpretability; and the full model combines both effects. The most consistent improvements appear in Martin Ratio and Ulcer Index, which are directly aligned with the paper's compound-growth and drawdown-path objective. This distinction is important for interpreting the walk-forward evidence. The framework improves Ulcer Index and Martin Ratio across the walk-forward protocols, while maximum-drawdown improvements are protocol-dependent. This pattern suggests that the mechanism operates primarily on the distribution and persistence of drawdowns rather than solely on the single worst drawdown realization. Maximum drawdown remains informative as a worst-case statistic, but it is not the primary metric for evaluating compound-growth preservation in this framework.
+
+\section{Conceptual Foundations}
+\label{sec:theoretical_motivation}
+
+This section provides the conceptual foundations of the framework. Formal approximation guarantees for the greedy layer are left for future work.
+
+\subsection{Dependence Instability and Latent Factors}
+
+A factor-model interpretation motivates the Frobenius stress signal. Suppose returns follow:
+\begin{equation}
+r_t = B f_t + \epsilon_t,
+\end{equation}
+with covariance:
+\begin{equation}
+\Sigma_t = B \mathrm{Var}(f_t) B^\top + D.
+\end{equation}
+
+Stress regimes may change the relative contribution of common factors, idiosyncratic shocks, and hedging relationships. In equity-only universes, this may appear as a stronger market mode. In multi-asset universes, it is more generally a structural rotation of the dependence matrix. The Frobenius distance provides a non-parametric proxy for this instability without requiring explicit estimation of the factor structure.
+
+This interpretation is consistent with latent-factor approaches to large-dimensional return systems. If the covariance structure is driven partly by common factors, then material shifts in factor strength or factor composition should appear as shifts in the correlation matrix. The Frobenius statistic does not identify the factors, but it measures the magnitude of the resulting structural change in the observable dependence matrix.
+
+\subsection{Exponential Tilting and Stress-Conditioned Empirical Distributions}
+
+The soft-weighting scheme can be interpreted as an exponential tilt of the empirical distribution. Observations in which the dependence structure is more abnormal receive higher probability mass, while the full sample remains represented. In entropy terms, the weighting scheme can be viewed as selecting a tilted empirical distribution that increases exposure to high-stress states while remaining linked to the historical distribution. This interpretation is related to the information-divergence view of probability reweighting in \citet{csiszar1975}: the tilt changes the empirical distribution in a controlled direction while avoiding a discontinuous stress/non-stress split.
+
+This interpretation helps distinguish the method from hard thresholding. A hard threshold discards all observations outside the selected stress set and treats observations just above and just below the cutoff discontinuously. Exponential tilting instead produces a continuum of stress conditioning. The parameter $\kappa$ controls the intensity of the tilt, while $N_{\mathrm{eff}}$ controls the degree of concentration. As $\kappa$ rises, the estimator approaches a stress-tail covariance; as $\kappa$ falls toward zero, it approaches the unconditional covariance.
+
+The effective-sample-size constraint is therefore not a cosmetic robustness check. It is the device that prevents the tilted estimator from becoming a small-sample tail estimator. This is important because portfolio optimization is highly sensitive to covariance-estimation error.
+
+\subsection{Compounding and Robust Growth}
+
+Expected log-growth is the natural object for long-horizon compounding. Following the growth-optimal tradition of \citet{kelly1956} and \citet{latane1959}, and the variance-drain decomposition formalized in stochastic portfolio theory \citep{fernholz2002}, a second-order approximation to expected log-growth can be written as
+\begin{equation}
+g(w) \approx w^\top \mu - \frac{1}{2} w^\top \Sigma w.
+\end{equation}
+The term $-\frac{1}{2}w^\top \Sigma w$ is the deterministic component of compound-growth degradation induced by volatility. This motivates the regime-conditional minimization of variance drain when the relevant covariance matrix is most likely to differ from its unconditional estimate.
+
+The framework does not maximize unconstrained log-growth. Instead, it minimizes stress-weighted variance subject to a robust lower bound on expected log-growth. This separates the objective of stress-risk control from the requirement that the portfolio preserve a minimum compound-growth profile. For a long-horizon investor, drawdowns matter not only because they are painful, but because they mechanically impair compound growth. A loss of 30\% requires a gain of approximately 43\% to recover. This asymmetry motivates the use of log-growth and drawdown-path metrics such as Ulcer Index and Martin Ratio.
+
+\subsection{Greedy Sparsification}
+
+The greedy layer is motivated by interpretability, parsimony, and robustness to estimation noise. In diversification problems, marginal benefits often exhibit diminishing returns: once a portfolio contains assets that hedge a stress direction, the incremental value of adding another similar asset tends to decline. Classical results by \citet{nemhauser1978} show that greedy selection has approximation guarantees for monotone submodular set functions. The SOCP-constrained portfolio problem considered here is more complex, and the paper does not claim that the full objective satisfies the classical assumptions required for the $1-1/e$ guarantee. Instead, it evaluates empirically whether greedy construction preserves the stress-aware frontier while producing sparse and interpretable allocations.
+
+The empirical evidence supports this interpretation. In the static setting, dense Stress-MV and Greedy Soft-Frob are close, indicating that the stress-weighted covariance estimator drives much of the improvement, while the greedy layer contributes mainly through its interaction with stress-conditioned covariance. In rolling walk-forward settings, the greedy layer becomes more important when training samples are shorter and covariance estimates noisier; the higher realized returns of greedy specifications are consistent with the interpretation that sparse construction preserves growth exposure, although a formal mechanism decomposition is left for future work.
+
+\section{Limitations and Future Work}
+\label{sec:limitations}
+
+Several limitations remain.
+
+First, the asset universe is a simple ETF proxy set. Broader asset-class universes, UCITS implementations, private assets, and international universes should be tested. The study also relies on Yahoo Finance adjusted OHLC data for reproducibility; a production-grade implementation should replicate the analysis with institutional price, corporate-action, bid-ask, and volume data.
+
+Second, transaction-cost estimates are based on daily OHLC data. Corwin--Schultz and Abdi--Ranaldo-style estimators \citep{corwinschultz2012,abdiranaldo2017} are useful but imperfect proxies for implementation costs. More granular bid-ask and volume data would improve the cost analysis.
+
+Third, the greedy algorithm is used as a sparse implementation layer, not as a formally proven global optimizer. Formal approximation guarantees would require additional assumptions and proof work.
+
+Fourth, the framework focuses on covariance and drawdown-path improvement rather than return forecasting. It does not claim to generate alpha or predict crises.
+
+Fifth, future work may replace the stress-weighted variance objective with a multi-period compounding-aware risk measure, such as expected shortfall or spectral risk applied to cumulative log-growth. Such an extension would represent a more methodological version of the current applied framework.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper develops a stress-weighted sparse strategic asset allocation framework. The method uses the Frobenius distance between current and long-run correlation structures to construct a continuous stress signal. This signal reweights historical observations to estimate a stress-conditioned covariance matrix, stabilized by shrinkage. Portfolio construction minimizes stress-weighted risk subject to a robust log-growth constraint, while a greedy core-satellite layer provides sparse and interpretable allocations.
+
+The empirical results support a positive but disciplined conclusion. The framework improves drawdown-adjusted and compounding-aware metrics relative to Markowitz-style baselines, especially Martin Ratio and Ulcer Index. Maximum-drawdown improvements are protocol-dependent: they appear in the expanding and rolling five-year specifications, as well as in the frozen final test, but not in the canonical rolling three-year protocol relative to the more conservative Markowitz baseline. Raw return improvements are positive but not statistically significant in the frozen final test. Walk-forward evidence suggests that the greedy layer is particularly valuable when estimation windows are shorter, while soft-Frobenius conditioning consistently improves Ulcer Index and Martin Ratio. The results are robust across an eight-model transaction-cost panel based on Corwin--Schultz, Abdi--Ranaldo, composite spread estimates, data-driven floors, and stress-conditioned liquidity adjustments.
+
+The main contribution is a practical portfolio-construction framework that conditions risk estimates on dependence-structure instability rather than treating all observations as equally informative. The empirical evidence supports its value: the framework delivers consistent improvements in Martin Ratio and Ulcer Index across walk-forward protocols and transaction-cost specifications, while paired-bootstrap inference supports positive Sharpe, Martin, Ulcer Index, and maximum-drawdown differentials in the frozen final test. The result is a sparse, interpretable allocation framework designed to preserve robust compound growth when diversification is most likely to become unreliable.
+
+\newpage
+
+
+\appendix
+\section{Bootstrap Replication Diagnostic}
+\label{app:bootstrap_reps}
+
+The main paper reports the audited $B=300$ specification because the bootstrap standard-deviation term entering the robust log-growth constraint has an approximate relative Monte Carlo standard error of $4.1\%$, compared with approximately $5.0\%$ under $B=200$. Table \ref{tab:boot_b_sensitivity} compares the earlier lower-replication diagnostic against the audited reference specification. The purpose of the table is not to select the specification with the best realized performance, but to document the impact of bootstrap precision on fold-level parameter selection and on the resulting walk-forward path.
+
+The comparison shows that the Sharpe and Martin advantages of Greedy Soft-Frob relative to Markowitz Base-Cov remain present under the audited $B=300$ reference. The largest change is in maximum drawdown under the rolling three-year protocol: under the lower-replication diagnostic the maximum-drawdown comparison was favorable to Greedy Soft-Frob, whereas under the audited reference it is unfavorable relative to Markowitz. This is why the main text emphasizes Martin Ratio and Ulcer Index as the most stable evidence, and treats maximum-drawdown improvements as protocol-dependent rather than universal.
+
+\begin{table}[h!]
+\centering
+\caption{Diagnostic comparison of walk-forward results under $B=200$ and audited $B=300$ bootstrap replications}
+\label{tab:boot_b_sensitivity}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrrrr}
+\toprule
+Protocol & $B$ & GSF Sharpe & GSF Martin & GSF MaxDD & Markowitz Sharpe & Markowitz Martin & Markowitz MaxDD \\
+\midrule
+Expanding & 200 & 1.150 & 2.263 & -17.84\% & 1.096 & 1.673 & -22.28\% \\
+Expanding & 300 & 1.177 & 2.441 & -17.82\% & 1.033 & 1.518 & -22.29\% \\
+\midrule
+Rolling 3y & 200 & 0.995 & 2.414 & -21.23\% & 0.884 & 0.994 & -24.82\% \\
+Rolling 3y & 300 & 0.916 & 1.336 & -30.21\% & 0.804 & 0.804 & -24.05\% \\
+\midrule
+Rolling 5y & 200 & 0.933 & 1.776 & -22.64\% & 0.923 & 1.159 & -23.59\% \\
+Rolling 5y & 300 & 0.841 & 1.573 & -23.16\% & 0.835 & 0.971 & -23.96\% \\
+\bottomrule
+\end{tabular}}
+\begin{minipage}{0.92\textwidth}
+\footnotesize \emph{Notes:} GSF denotes Greedy Soft-Frob. The $B=200$ rows refer to a lower-replication diagnostic run; the $B=300$ rows are the audited reference specification used in the main text. All figures are net of the main CS/AR median-floor-stress transaction-cost model.
+\end{minipage}
+\end{table}
+
+\newpage
+\section{ETF Correlation Matrix Diagnostic}
+\label{app:corr_matrix}
+
+Figure \ref{fig:etf_correlation_matrix} reports the full-sample return correlation matrix for the 12-ETF universe. The matrix is included as a diagnostic rather than a model input. It documents the heterogeneous dependence structure of the investable asset-class proxies and illustrates why a single unconditional covariance matrix may be insufficient during regimes in which the cross-asset dependence structure shifts.
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/etf_correlation_matrix.png}
+\caption{ETF return correlation matrix over the effective common sample, April 2007--December 2025. The average pairwise correlation is 0.22, with pairwise correlations ranging from -0.32 to 0.91.}
+\label{fig:etf_correlation_matrix}
+\end{figure}
+
+\newpage
+
+\begin{thebibliography}{99}
+
+\bibitem[Abdi and Ranaldo(2017)]{abdiranaldo2017}
+Abdi, F., and A. Ranaldo. 2017.
+``A Simple Estimation of Bid-Ask Spreads from Daily Close, High, and Low Prices.''
+\textit{Review of Financial Studies} 30(12): 4437--4480.
+
+\bibitem[Ang and Chen(2002)]{angchen2002}
+Ang, A., and J. Chen. 2002.
+``Asymmetric Correlations of Equity Portfolios.''
+\textit{Journal of Financial Economics} 63(3): 443--494.
+
+\bibitem[Ben-Tal, El Ghaoui, and Nemirovski(2009)]{bental2009}
+Ben-Tal, A., L. El Ghaoui, and A. Nemirovski. 2009.
+\textit{Robust Optimization}.
+Princeton University Press.
+
+\bibitem[Brodie et al.(2009)]{brodie2009}
+Brodie, J., I. Daubechies, C. De Mol, D. Giannone, and I. Loris. 2009.
+``Sparse and Stable Markowitz Portfolios.''
+\textit{Proceedings of the National Academy of Sciences} 106(30): 12267--12272.
+
+\bibitem[Corwin and Schultz(2012)]{corwinschultz2012}
+Corwin, S. A., and P. Schultz. 2012.
+``A Simple Way to Estimate Bid-Ask Spreads from Daily High and Low Prices.''
+\textit{Journal of Finance} 67(2): 719--760.
+
+\bibitem[DeMiguel, Garlappi, and Uppal(2009)]{demiguel2009}
+DeMiguel, V., L. Garlappi, and R. Uppal. 2009.
+``Optimal Versus Naive Diversification: How Inefficient is the 1/N Portfolio Strategy?''
+\textit{Review of Financial Studies} 22(5): 1915--1953.
+
+
+\bibitem[Csisz\'ar(1975)]{csiszar1975}
+Csisz\'ar, I. 1975.
+``I-Divergence Geometry of Probability Distributions and Minimization Problems.''
+\textit{Annals of Probability} 3(1): 146--158.
+
+\bibitem[Fernholz(2002)]{fernholz2002}
+Fernholz, R. 2002.
+\textit{Stochastic Portfolio Theory}.
+Springer.
+
+\bibitem[Nemhauser, Wolsey, and Fisher(1978)]{nemhauser1978}
+Nemhauser, G. L., L. A. Wolsey, and M. L. Fisher. 1978.
+``An Analysis of Approximations for Maximizing Submodular Set Functions---I.''
+\textit{Mathematical Programming} 14: 265--294.
+
+\bibitem[Forni et al.(2000)]{forni2000}
+Forni, M., M. Hallin, M. Lippi, and L. Reichlin. 2000.
+``The Generalized Dynamic-Factor Model: Identification and Estimation.''
+\textit{Review of Economics and Statistics} 82(4): 540--554.
+
+\bibitem[Jagannathan and Ma(2003)]{jagannathanma2003}
+Jagannathan, R., and T. Ma. 2003.
+``Risk Reduction in Large Portfolios: Why Imposing the Wrong Constraints Helps.''
+\textit{Journal of Finance} 58(4): 1651--1683.
+
+\bibitem[Kelly(1956)]{kelly1956}
+Kelly, J. L. 1956.
+``A New Interpretation of Information Rate.''
+\textit{Bell System Technical Journal} 35(4): 917--926.
+
+\bibitem[Latan\'e(1959)]{latane1959}
+Latan\'e, H. A. 1959.
+``Criteria for Choice Among Risky Ventures.''
+\textit{Journal of Political Economy} 67(2): 144--155.
+
+\bibitem[Ledoit and Wolf(2004)]{ledoitwolf2004}
+Ledoit, O., and M. Wolf. 2004.
+``Honey, I Shrunk the Sample Covariance Matrix.''
+\textit{Journal of Portfolio Management} 30(4): 110--119.
+
+\bibitem[Longin and Solnik(2001)]{longinsolnik2001}
+Longin, F., and B. Solnik. 2001.
+``Extreme Correlation of International Equity Markets.''
+\textit{Journal of Finance} 56(2): 649--676.
+
+\bibitem[Markowitz(1952)]{markowitz1952}
+Markowitz, H. 1952.
+``Portfolio Selection.''
+\textit{Journal of Finance} 7(1): 77--91.
+
+\bibitem[Michaud(1989)]{michaud1989}
+Michaud, R. O. 1989.
+``The Markowitz Optimization Enigma: Is Optimized Optimal?''
+\textit{Financial Analysts Journal} 45(1): 31--42.
+
+\bibitem[Politis and Romano(1994)]{politisromano1994}
+Politis, D. N., and J. P. Romano. 1994.
+``The Stationary Bootstrap.''
+\textit{Journal of the American Statistical Association} 89(428): 1303--1313.
+
+\bibitem[Stock and Watson(2002)]{stockwatson2002}
+Stock, J. H., and M. W. Watson. 2002.
+``Forecasting Using Principal Components from a Large Number of Predictors.''
+\textit{Journal of the American Statistical Association} 97(460): 1167--1179.
+
+\end{thebibliography}
+
+\end{document}
