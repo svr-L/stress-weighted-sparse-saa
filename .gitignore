@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Raw market data should not be committed
+data/
+raw_data/
+*.parquet
+*.feather
+*.h5
+*.hdf5
+
+# Large generated artefacts can be regenerated
+results/*.csv
+results/*.xlsx
