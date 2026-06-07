@@ -1,0 +1,11 @@
+.gitignore
+README.md
+figures/etf_correlation_matrix.png
+figures/risk_contribution_shift.png
+figures/soft_frob_correlation_shift.png
+figures/walk_forward_drawdown_martin.png
+figures/wf_net_wealth_drawdown_expanding_1y_1m.png
+notebooks/stress-weighted-sparse-saa.ipynb
+paper/stress-weighted-sparse-saa_preprint_JPM_READY.pdf
+paper/stress-weighted-sparse-saa_preprint_JPM_READY.tex
+requirements.txt
